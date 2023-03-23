@@ -1,0 +1,24 @@
+[package]
+name = "api-cli"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+bytes = { version = "1.2.1", features = ["serde"] }
+revm = { version = "3.0.0", features = ["no_gas_measuring"] }
+hex = "0.4"
+primitive-types = { version = "0.12.1", features = ["rlp", "serde"] }
+rand = "0.8.5"
+glob = "0.3.0"
+rust-crypto = "0.2"
+itertools = "0.10.2"
+reqwest = {version = "0.11.15", features = ["blocking", "json"]}
+serde_json = "1.0.94"
+ethabi = "18.0.0"
+
+
+[[bin]]
+name = "api-cli"
+path = "src/cli.rs"
