@@ -38,17 +38,11 @@ pub struct TestHost {
 
 pub fn get_rpc_url(name: String) -> &'static str {
     match name.as_str() {
-        "ETH" => "https://mainnet.infura.io/v3/",
-        "ROPSTEN" => "https://ropsten.infura.io/v3/",
-        "RINKEBY" => "https://rinkeby.infura.io/v3/",
-        "KOVAN" => "https://kovan.infura.io/v3/",
-        "GOERLI" => "https://goerli.infura.io/v3/",
+        "ETH" => "https://eth.llamarpc.com",
         "BSC" => "https://bsc-dataseed.binance.org/",
         "BSC_TESTNET" => "https://data-seed-prebsc-1-s1.binance.org:8545/",
         "POLYGON" => "https://rpc-mainnet.maticvigil.com/",
         "MUMBAI" => "https://rpc-mumbai.maticvigil.com/",
-        "CORE" => "https://rpc.corepaper.org/",
-        "FANTOM" => "https://rpcapi.fantom.network/",
         "ARBITRUM" => "https://arb1.arbitrum.io/rpc",
         _ => {
             panic!("Invalid chain type");
