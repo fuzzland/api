@@ -62,6 +62,7 @@ cd example
 solc infinite_mint.sol --base-path . --include-path .. --abi --bin --overwrite -o ./out
 ```
 
+## Testkit
 A test kit is also provided (you need to setup Rust using [rustup](https://rustup.rs/)):
 ```bash
 # build testkit
@@ -71,3 +72,10 @@ cargo build
 ```
 which calls all the `test_*` functions in the `infinite_mint.sol` contract. 
 Unknown storage slots and unknown contracts are automatically fetched from BSC.
+
+You can also use Docker to run the testkit, where both the testkit and the example contract have already been built inside the container:
+```bash
+docker run -it fuzzland/api-client bash
+# inside the container
+$ ./target/debug/api-cli "./example/out/infinite_mint*" BSC
+```
