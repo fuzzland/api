@@ -373,7 +373,9 @@ impl Host for TestHost {
 
                     // erc20 analysis
                     let input_vec = data.to_vec();
-                    handle_erc20!(input_vec, target);
+                    if input_vec.len() >= 4 {
+                        handle_erc20!(input_vec, target);
+                    }
 
                     let (ret, res) = call_func(
                         self, caller, target, data, value,
