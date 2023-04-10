@@ -394,7 +394,9 @@ impl Host for TestHost {
             self.call_traces.push((input.context.address, input.input.clone()));
             // erc20 analysis
             let data = input.input.to_vec();
-            handle_erc20!(data, input.context.address);
+            if data.len() >= 4 {
+                handle_erc20!(data, input.context.address);
+            }
         }
 
         let code = match self.codes.get(&input.context.code_address) {
