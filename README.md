@@ -84,3 +84,6 @@ docker run -it fuzzland/api-client bash
 # inside the container
 $ ./target/debug/api-cli "./example/out/infinite_mint*" BSC
 ```
+
+To make testing faster, you can replace public RPC to your own Infura / QuickNode / etc RPC @ https://github.com/fuzzland/api/blob/main/src/cli.rs#L47-L52
+
