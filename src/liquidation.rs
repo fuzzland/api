@@ -11,10 +11,10 @@ pub fn get_router_and_weth(network: &str) -> (B160, B160, u8) {
             (B160::from_str("0x7a250d5630b4cf539739df2c5dacb4c659f2488d").unwrap(), B160::from_str("0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2").unwrap(), 1)
         }
         "BSC" => {
-            (B160::from_str("0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c").unwrap(), B160::from_str("0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2").unwrap(), 56)
+            (B160::from_str("0x05ff2b0db69458a0750badebc4f9e13add608c7f").unwrap(), B160::from_str("0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c").unwrap(), 56)
         },
         "POLYGON" => {
-            (B160::from_str("0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270").unwrap(), B160::from_str("0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2").unwrap(), 137)
+            (B160::from_str("0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506").unwrap(), B160::from_str("0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270").unwrap(), 137)
         },
         _ => {
             panic!("Unsupported network: {} for buying / liquidation", network);
