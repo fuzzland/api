@@ -21,7 +21,7 @@ contract infinite_mint {
 
     // call with bytes defined in the config file
     constructor(){
-        target = ERC20(0x6AB5F1f81008c3F4481F7EF5c3304AD183DAd236);
+        target = ERC20(0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48);
         current_total_supply = target.totalSupply();
     }
 
@@ -51,11 +51,12 @@ contract infinite_mint {
     function invariant_infinite_mint1() public returns (bool) {
         // check if the total supply changed
         if (target.totalSupply() != current_total_supply) {
+            ctx.print_string("total supply changed");
             return true;
         }
         // get affected accounts
         (address[] memory accounts, address[] memory contracts) = ctx.get_affected_accounts_ierc20();
-        uint256 diff = 0;
+        int256 diff = 0;
         // loop over all affected accounts used in IERC20 calls
         for (uint i = 0; i < accounts.length; i++) {
             // check if the call target is the target contract
@@ -71,19 +72,33 @@ contract infinite_mint {
                 // get the balance of the account after the transaction
                 uint256 curr_balance = uint256(ERC20(contracts[i]).balanceOf(accounts[i]));
                 // calculate the difference
-                diff += curr_balance - prev_balance;
+                diff -= int256(prev_balance);
+                diff += int256(curr_balance);
             }
         }
         // the difference should be 0
         if (diff != 0) {
+            ctx.print_string("diff != 0");
             return true;
         }
         return false;
     }
 
     function test_1() public {
-        ctx.test_call(address(target), address(this), abi.encodeWithSignature("transfer(address,uint256)", address(0x1),0), 0);
+        ctx.buy_token(address(target), 1e18); // buy 1 ETH worth of token
+        ctx.print_int("balanceOf(target)", target.balanceOf(address(this))); // around 1800e6 USDC
+
+        // create a test call
+        ctx.test_call(address(target), address(this), abi.encodeWithSignature("transfer(address,uint256)", address(0x1),1e6), 0);
+
+        // not token swapped during last call
+        require(ctx.contains_swap() == false);
+        require(ctx.get_affected_pairs().length == 0);
+
+        // check invariants
         require(invariant_infinite_mint0() == false);
         require(invariant_infinite_mint1() == false);
+
+        ctx.print_string("all good");
     }
 }

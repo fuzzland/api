@@ -3,7 +3,7 @@ The FuzzLand API specification for Solidity Spec developments outlines the requi
 
 ```solidity
 contract Invariant {
-    
+
     // invariants functions
     function invariant_1() public returns (bool) {
         // do something
@@ -14,18 +14,18 @@ contract Invariant {
         // do something
         return true;
     }
-    ...
-    
-    // test functions
-    function test_1() public {
-        // do something
-    }
-    
-    function test_2() public {
-        // do something
-    }
-    
-    ...
+...
+
+// test functions
+function test_1() public {
+// do something
+}
+
+function test_2() public {
+// do something
+}
+
+...
 }
 ```
 
@@ -49,6 +49,11 @@ function get_affected_contracts() external view returns (address[] memory, bytes
 // get all affected accounts due to ERC20 transfer during the last transaction
 function get_affected_accounts_ierc20() external view returns (address[] memory, address[] memory);
 
+// whether last transaction contains token swapping
+function contains_swap() external view returns (bool);
+// get all affected pairs due to token swapping during the last transaction
+function get_affected_pairs() external view returns (address[] calldata);
+
 // call a function with the state before the last transaction
 function call_prev_state(address _contract, address caller, bytes memory data, uint256 value) external view returns (bytes memory);
 
@@ -70,7 +75,7 @@ cargo build
 # run the testkit
 ./target/debug/api-cli "./example/out/infinite_mint*" BSC
 ```
-which calls all the `test_*` functions in the `infinite_mint.sol` contract. 
+which calls all the `test_*` functions in the `infinite_mint.sol` contract.
 Unknown storage slots and unknown contracts are automatically fetched from BSC.
 
 You can also use Docker to run the testkit, where both the testkit and the example contract have already been built inside the container:

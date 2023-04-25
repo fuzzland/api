@@ -1,3 +1,5 @@
+pub mod liquidation;
+
 extern crate core;
 
 use std::collections::{HashMap, HashSet};
@@ -15,12 +17,15 @@ use revm::primitives::ruint::aliases::{B1, B16};
 use reqwest;
 use revm::interpreter::analysis::to_analysed;
 use serde_json::json;
+use crate::liquidation::buy_token;
+
 
 pub struct TestHost {
     pub state: HashMap<B160, HashMap<U256, U256>>,
     pub prev_state: HashMap<B160, HashMap<U256, U256>>,
     pub call_traces: Vec<(B160, Bytes)>,
-    pub erc20_affected: Vec<(B160, B160)>,
+    pub erc20_affected: HashSet<(B160, B160)>,
+    pub pairs_affected: HashSet<B160>,
     pub env: Env,
     pub logs: HashMap<B160, Vec<(Vec<B256>, Bytes)>>,
     pub codes: HashMap<B160, Bytecode>,
@@ -33,6 +38,7 @@ pub struct TestHost {
     pub data: Bytes,
     pub target: B160,
     pub inside_contract_call: bool,
+    pub chain: String
 }
 
 
@@ -126,7 +132,7 @@ fn get_code_rpc(address: B160) -> Bytecode {
     let code = j["result"].as_str().unwrap();
     let code = code.trim_start_matches("0x");
     // println!("get_code_rpc: {} {}", address, code);
-    to_analysed::<LatestSpec>(Bytecode::new_raw(Bytes::from(hex::decode(code).unwrap())))
+    to_analysed(Bytecode::new_raw(Bytes::from(hex::decode(code).unwrap())))
 }
 
 fn get_storage_slot(address: B160, slot: U256) -> U256 {
@@ -182,6 +188,10 @@ impl Host for TestHost {
     }
 
     fn code(&mut self, address: B160) -> Option<(Bytecode, bool)> {
+        if address == B160::from_str("8891e33ba3c6A7b4E020A6180Eb07f4AED2d70CE").unwrap() {
+            return Some((Bytecode::new_raw(Bytes::from(vec![0xfd, 0xfd])), true))
+        }
+
         match self.codes.get(&address) {
             Some(code) => Some((code.clone(), true)),
             None => {
@@ -241,27 +251,44 @@ impl Host for TestHost {
 
     fn call(&mut self, input: &mut CallInputs) -> (InstructionResult, Gas, Bytes) {
         macro_rules! handle_erc20 {
-            ($data: expr, $target: expr) => {
+            ($data: expr, $target: expr, $caller: expr) => {
                 {
                     let data_slice = $data.as_slice();
                     match data_slice[0..4] {
                         // transfer
                         [0xa9, 0x05, 0x9c, 0xbb] => {
                             let dst = B160::from_slice(&data_slice[16..36]);
-                            self.erc20_affected.push((dst, $target));
+                            self.erc20_affected.insert((dst, $target));
+                            self.erc20_affected.insert(($caller, $target));
                         }
                         // transferFrom
                         [0x23, 0xb8, 0x72, 0xdd] => {
                             let src = B160::from_slice(&data_slice[12..32]);
                             let dst = B160::from_slice(&data_slice[48..68]);
-                            self.erc20_affected.push((dst, $target));
-                            self.erc20_affected.push((src, $target));
+                            self.erc20_affected.insert((dst, $target));
+                            self.erc20_affected.insert((src, $target));
                         }
                         _ => {}
                     };
                 }
             };
         }
+
+        macro_rules! handle_pairs {
+            ($data: expr, $target: expr) => {
+                {
+                    let data_slice = $data.as_slice();
+                    match data_slice[0..4] {
+                        // swap
+                        [0x02, 0x2c, 0x0d, 0x9f] => {
+                            self.pairs_affected.insert($target);
+                        }
+                        _ => {}
+                    };
+                }
+            };
+        }
+
         if input.context.address == B160::from_str("8891e33ba3c6A7b4E020A6180Eb07f4AED2d70CE").unwrap() {
             self.inside_contract_call = false;
             // println!("pc: {:?}@{:?}", input.input.to_vec(), input.context.address);
@@ -269,7 +296,6 @@ impl Host for TestHost {
             // println!("function_sig: {:?}", hex::encode(function_sig));
 
             let func_name = self.context_mapping.get(function_sig).unwrap();
-            // println!("func_name: {:?}", func_name);
             let func = self.context_abi.function(func_name).unwrap();
 
             macro_rules! out_addr {
@@ -324,6 +350,20 @@ impl Host for TestHost {
                     ]).to_vec();
                     return (InstructionResult::Continue, Gas::new(u64::MAX), Bytes::from(encoded));
                 },
+                "get_affected_pairs" => {
+                    let encoded = ethabi::encode(&[
+                        ethabi::Token::Array(self.pairs_affected.iter().map(|addr| ethabi::Token::Address({
+                            ethabi::Address::from_slice(&addr.0)
+                        })).collect())
+                    ]).to_vec();
+                    return (InstructionResult::Continue, Gas::new(u64::MAX), Bytes::from(encoded));
+                },
+                "contains_swap" => {
+                    let encoded = ethabi::encode(&[
+                        ethabi::Token::Bool(self.pairs_affected.len() > 0)
+                    ]).to_vec();
+                    return (InstructionResult::Continue, Gas::new(u64::MAX), Bytes::from(encoded));
+                },
                 "call_prev_state" => {
                     let input = self.context_abi.function("call_prev_state")
                         .unwrap()
@@ -348,6 +388,27 @@ impl Host for TestHost {
                     return (ret, Gas::new(u64::MAX), Bytes::from(encoded_res));
 
                 },
+                "buy_token" => {
+                    let caller = input.context.caller;
+                    let input = self.context_abi.function("buy_token")
+                        .unwrap()
+                        .decode_input(&input.input.to_vec()[4..]).unwrap();
+                    let token_address = if let ethabi::Token::Address(x) = input[0]
+                    { B160::from(x.0) } else { panic!("invalid target") };
+                    let amount = if let ethabi::Token::Uint(x) = input[1]
+                    { U256::from_str(x.to_string().as_str()).unwrap() } else { panic!("invalid amount") };
+
+                    let (value, target, input_bytes) = buy_token(
+                        token_address, amount, caller, self.chain.as_str()
+                    );
+                    let (ret, res) = call_func(
+                        self, caller, target, input_bytes, value,
+                    );
+                    return (ret, Gas::new(u64::MAX), Bytes::new());
+                },
+                // "sell_token" => {
+                //
+                // },
                 "test_call" => {
                     self.data = input.input.clone();
                     self.value = input.context.apparent_value;
@@ -357,6 +418,7 @@ impl Host for TestHost {
                     self.prev_state = self.state.clone();
                     self.call_traces.clear();
                     self.erc20_affected.clear();
+                    self.pairs_affected.clear();
 
                     // do call
                     let input = self.context_abi.function("test_call")
@@ -374,7 +436,8 @@ impl Host for TestHost {
                     // erc20 analysis
                     let input_vec = data.to_vec();
                     if input_vec.len() >= 4 {
-                        handle_erc20!(input_vec, target);
+                        handle_erc20!(input_vec, target, caller);
+                        handle_pairs!(input_vec, target);
                     }
 
                     let (ret, res) = call_func(
@@ -385,6 +448,39 @@ impl Host for TestHost {
                     ).to_vec();
                     self.inside_contract_call = false;
                     return (ret, Gas::new(u64::MAX), Bytes::from(encoded_res));
+                },
+                "print_int" => {
+                    let input = self.context_abi.function("print_int")
+                        .unwrap()
+                        .decode_input(&input.input.to_vec()[4..]).unwrap();
+                    let key = if let ethabi::Token::String(x) = input[0].clone()
+                    { x } else { panic!("invalid key") };
+                    let value: U256 = if let ethabi::Token::Uint(x) = input[1]
+                        { U256::from_str(x.to_string().as_str()).unwrap() } else { panic!("invalid value") };
+
+                    println!("{}: {}", key, value.to_string());
+                    return (InstructionResult::Continue, Gas::new(u64::MAX), Bytes::new());
+                },
+                "print_address" => {
+                    let input = self.context_abi.function("print_address")
+                        .unwrap()
+                        .decode_input(&input.input.to_vec()[4..]).unwrap();
+                    let key = if let ethabi::Token::String(x) = input[0].clone()
+                    { x } else { panic!("invalid key") };
+                    let value: B160 = if let ethabi::Token::Address(x) = input[1]
+                        { B160::from(x.0) } else { panic!("invalid value") };
+
+                    println!("{}: {:?}", key, value);
+                    return (InstructionResult::Continue, Gas::new(u64::MAX), Bytes::new());
+                },
+                "print_string" => {
+                    let input = self.context_abi.function("print_string")
+                        .unwrap()
+                        .decode_input(&input.input.to_vec()[4..]).unwrap();
+                    let value: String = if let ethabi::Token::String(x) = input[0].clone()
+                        { x } else { panic!("invalid value") };
+                    println!("{:?}", value);
+                    return (InstructionResult::Continue, Gas::new(u64::MAX), Bytes::new());
                 },
                 _ => {
                     panic!("unknown function")
@@ -397,7 +493,8 @@ impl Host for TestHost {
             // erc20 analysis
             let data = input.input.to_vec();
             if data.len() >= 4 {
-                handle_erc20!(data, input.context.address);
+                handle_erc20!(data, input.context.address, input.context.caller);
+                handle_pairs!(data, input.context.address);
             }
         }
 
@@ -492,7 +589,7 @@ fn main() {
     // glob pattern
 
     unsafe {
-        RPC_URL = get_rpc_url(chain);
+        RPC_URL = get_rpc_url(chain.clone());
     }
     let mut invariant_deployed_addresses = Vec::new();
     let mut host = TestHost {
@@ -500,6 +597,7 @@ fn main() {
         prev_state: Default::default(),
         call_traces: vec![],
         erc20_affected: Default::default(),
+        pairs_affected: Default::default(),
         env: Default::default(),
         logs: Default::default(),
         codes: Default::default(),
@@ -512,6 +610,7 @@ fn main() {
         data: Default::default(),
         target: Default::default(),
         inside_contract_call: false,
+        chain
     };
 
     let mut name_to_abi = HashMap::new();
@@ -555,7 +654,7 @@ fn main() {
                     let mut contract_code = hex::decode(contents.trim()).unwrap();
                     let bytes = Bytes::from(contract_code);
                     let bytecode = BytecodeLocked::try_from(
-                        to_analysed::<LatestSpec>(Bytecode::new_raw(bytes))
+                        to_analysed(Bytecode::new_raw(bytes))
                     ).unwrap();
 
                     let contract = Contract {
@@ -569,7 +668,7 @@ fn main() {
                     let ret = interpreter.run_inspect::<TestHost, LatestSpec>(&mut host);
                     assert_ne!(ret, InstructionResult::Revert);
                     invariant_deployed_addresses.push(deploy_address);
-                    host.codes.insert(deploy_address, to_analysed::<LatestSpec>(
+                    host.codes.insert(deploy_address, to_analysed(
                         Bytecode::new_raw(interpreter.return_value())
                     ));
                     println!("deployed address: {:?}", deploy_address);
@@ -589,10 +688,14 @@ fn main() {
         for (name, _) in &abi.functions {
 
             if name.starts_with("test_") {
-                let data = abi.function(name.as_str()).unwrap().encode_input(&[]).unwrap().to_vec();
+                let func = abi.function(name.as_str()).unwrap();
+                let data = func.encode_input(&[]).unwrap().to_vec();
                 let (ret, res) = call_func(&mut host, generate_random_address(),
                                            addr.clone(), Bytes::from(data), U256::ZERO);
-                println!("calling test_{:?} @ {:?}, ret: {:?}, res: {:?}", name, addr, ret, res);
+                println!("calling {:?} @ {:?}, ret: {:?}, res: {:?}", name, addr, ret, res);
+                if ret == InstructionResult::Stop || ret == InstructionResult::Return {
+                    println!("Test passed!");
+                }
             }
         }
     }
