@@ -73,7 +73,7 @@ A test kit is also provided (you need to setup Rust using [rustup](https://rustu
 # build testkit
 cargo build
 # run the testkit
-./target/debug/api-cli "./example/out/infinite_mint*" BSC
+./target/debug/api-cli "./example/out/infinite_mint*" ETH
 ```
 which calls all the `test_*` functions in the `infinite_mint.sol` contract.
 Unknown storage slots and unknown contracts are automatically fetched from BSC.
