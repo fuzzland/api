@@ -85,8 +85,13 @@ contract infinite_mint {
     }
 
     function test_1() public {
+        ctx.set_balance(address(this), 10e18); // set balance to 10 ETH
+        ctx.print_int("ETH balance", address(this).balance); // 10 ETH
+
         ctx.buy_token(address(target), 1e18); // buy 1 ETH worth of token
         ctx.print_int("balanceOf(target)", target.balanceOf(address(this))); // around 1800e6 USDC
+        ctx.sell_token_to_eth_best_path(address(target), 1e6); // sell 1 USDC
+        ctx.print_int("balanceOf(target)", target.balanceOf(address(this))); // around 1801e6 USDC
 
         // create a test call
         ctx.test_call(address(target), address(this), abi.encodeWithSignature("transfer(address,uint256)", address(0x1),1e6), 0);
@@ -101,4 +106,6 @@ contract infinite_mint {
 
         ctx.print_string("all good");
     }
+
+    fallback () external payable {}
 }

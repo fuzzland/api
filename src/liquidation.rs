@@ -1,5 +1,6 @@
 use std::str::FromStr;
 use bytes::Bytes;
+use ethabi::Uint;
 use revm::primitives::{B160, U256};
 
 
@@ -37,6 +38,17 @@ fn get_1inch_swap_args(from_token: B160, to_token: B160, amount: U256,caller: B1
         )
     ).unwrap();
     let json: serde_json::Value = result.json().unwrap();
+    // println!("{:?}", format!(
+    //     "{}{}/swap?fromTokenAddress={:?}&toTokenAddress={:?}&amount={}&disableEstimate=true&slippage=50&fromAddress={:?}",
+    //     INCH_API,
+    //     chain_id,
+    //     from_token,
+    //     to_token,
+    //     amount.to_string(),
+    //     caller
+    // ));
+    // println!("{:?}", json);
+
 
     let tx = json["tx"].as_object().unwrap();
     let to = B160::from_str(tx.get("to").unwrap().as_str().unwrap()).unwrap();
@@ -170,6 +182,47 @@ pub fn buy_token(
 }
 
 
+pub fn sell_token(
+    token: B160,
+    amount: U256,
+    caller: B160,
+    network: &str,
+) -> Vec<(U256, B160, Bytes)> {
+    let (_, weth, _) = get_router_and_weth(network);
+    if token == weth {
+        // directly deposit
+        return vec![(amount, weth, Bytes::from(vec![0x2e, 0x1a, 0x7d, 0x4d]))];
+    }
+
+    let (_, target, bys) = get_1inch_swap_args(
+        token,
+        B160::from_str("0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee").unwrap(),
+        amount,
+        caller,
+        network
+    );
+    // build approve transaction
+    let approve_hash = vec![0x09, 0x5e, 0xa7, 0xb3];
+    let approve_args = ethabi::encode(
+            &[
+                ethabi::token::Token::Address(
+                    ethabi::Address::from_slice(&target.0)
+                ),
+                ethabi::token::Token::Uint(
+                    Uint::MAX
+                ),
+            ]
+        ).to_vec();
+
+    let approve_tx = vec![approve_hash, approve_args].concat();
+
+    return vec![
+        (U256::ZERO, token, Bytes::from(approve_tx)),
+        (U256::ZERO, target, bys),
+    ];
+}
+
+
 // write a test
 #[cfg(test)]
 mod tests {
@@ -190,8 +243,8 @@ mod tests {
     #[test]
     fn test_swap_1inch() {
         let (value, target, bys) = get_1inch_swap_args(
-            B160::from_str("0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE").unwrap(),
             B160::from_str("0xf3ae5d769e153ef72b4e3591ac004e89f48107a1").unwrap(),
+            B160::from_str("0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE").unwrap(),
             U256::from_str("1257979238016341134939").unwrap(),
             B160::from_str("0xe8a7dB54F27FC7B855AE9BC950341878952EfF98").unwrap(),
             "ETH"

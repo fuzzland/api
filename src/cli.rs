@@ -10,6 +10,7 @@ use std::str::FromStr;
 use bytes::Bytes;
 use ethabi::Hash;
 use glob::glob;
+use primitive_types::H160;
 use rand::RngCore;
 use revm::interpreter::{BytecodeLocked, CallInputs, Contract, CreateInputs, Gas, Host, InstructionResult, Interpreter, SelfDestructResult};
 use revm::primitives::{B160, B256, Bytecode, Env, LatestSpec, Spec, U256};
@@ -17,7 +18,7 @@ use revm::primitives::ruint::aliases::{B1, B16};
 use reqwest;
 use revm::interpreter::analysis::to_analysed;
 use serde_json::json;
-use crate::liquidation::buy_token;
+use crate::liquidation::{buy_token, sell_token};
 
 
 pub struct TestHost {
@@ -38,7 +39,9 @@ pub struct TestHost {
     pub data: Bytes,
     pub target: B160,
     pub inside_contract_call: bool,
-    pub chain: String
+    pub chain: String,
+
+    pub set_balance: HashMap<B160, U256>,
 }
 
 
@@ -159,10 +162,23 @@ fn get_storage_slot(address: B160, slot: U256) -> U256 {
     U256::from_str_radix(slot_val, 16).unwrap()
 }
 
+impl TestHost {
+    pub fn add_balance(&mut self, addr: &B160, balance: U256) {
+        let (initial_balance, _) = self.balance(*addr).unwrap();
+        self.set_balance.insert(*addr, initial_balance + balance);
+    }
+
+    pub fn reduce_balance(&mut self, addr: &B160, balance: U256) {
+        let (initial_balance, _) = self.balance(*addr).unwrap();
+        self.set_balance.insert(*addr, initial_balance - balance);
+    }
+}
+
 impl Host for TestHost {
     fn step(&mut self, interpreter: &mut Interpreter, is_static: bool) -> InstructionResult {
         if unsafe {*interpreter.instruction_pointer} == 0xfd {
-            println!("pc: {}@{:?} reverted", interpreter.program_counter(), interpreter.contract.address);
+            println!("pc: {}@{:?} reverted {:?}", interpreter.program_counter(), interpreter.contract.address,
+                     hex::encode(interpreter.memory.data()));
         }
         InstructionResult::Continue
     }
@@ -184,7 +200,14 @@ impl Host for TestHost {
     }
 
     fn balance(&mut self, address: B160) -> Option<(U256, bool)> {
-        Some((get_balance_rpc(address), true))
+        match self.set_balance.get(&address) {
+            Some(balance) => Some((*balance, true)),
+            None => {
+                let balance = get_balance_rpc(address);
+                self.set_balance.insert(address, balance);
+                Some((balance, true))
+            }
+        }
     }
 
     fn code(&mut self, address: B160) -> Option<(Bytecode, bool)> {
@@ -388,6 +411,17 @@ impl Host for TestHost {
                     return (ret, Gas::new(u64::MAX), Bytes::from(encoded_res));
 
                 },
+                "set_balance" => {
+                    let input = self.context_abi.function("set_balance")
+                        .unwrap()
+                        .decode_input(&input.input.to_vec()[4..]).unwrap();
+                    let account = if let ethabi::Token::Address(x) = input[0]
+                    { B160::from(x.0) } else { panic!("invalid account") };
+                    let amount = if let ethabi::Token::Uint(x) = input[1]
+                    { U256::from_str(x.to_string().as_str()).unwrap() } else { panic!("invalid amount") };
+                    self.set_balance.insert(account, amount);
+                    return (InstructionResult::Return, Gas::new(u64::MAX), Bytes::new());
+                },
                 "buy_token" => {
                     let caller = input.context.caller;
                     let input = self.context_abi.function("buy_token")
@@ -401,14 +435,42 @@ impl Host for TestHost {
                     let (value, target, input_bytes) = buy_token(
                         token_address, amount, caller, self.chain.as_str()
                     );
+                    self.add_balance(&target, value);
+                    self.reduce_balance(&caller, value);
+
+                    // println!("buy_token: {:?} {:?} {:?}", value, target, hex::encode(input_bytes.clone()));
                     let (ret, res) = call_func(
                         self, caller, target, input_bytes, value,
                     );
                     return (ret, Gas::new(u64::MAX), Bytes::new());
                 },
-                // "sell_token" => {
-                //
-                // },
+                "sell_token_to_eth_best_path" => {
+                    let caller = input.context.caller;
+                    let input = self.context_abi.function("sell_token_to_eth_best_path")
+                        .unwrap()
+                        .decode_input(&input.input.to_vec()[4..]).unwrap();
+                    let token_address = if let ethabi::Token::Address(x) = input[0]
+                    { B160::from(x.0) } else { panic!("invalid target") };
+                    let amount = if let ethabi::Token::Uint(x) = input[1]
+                    { U256::from_str(x.to_string().as_str()).unwrap() } else { panic!("invalid amount") };
+
+                    let transactions = sell_token(
+                        token_address, amount, caller, self.chain.as_str()
+                    );
+
+                    let mut ret = InstructionResult::Continue;
+                    for (value, target, input_bytes) in transactions {
+                        let (_ret, res) = call_func(
+                            self, caller, target, input_bytes, value,
+                        );
+                        ret = _ret;
+                        if ret == InstructionResult::Revert {
+                            println!("Sell token reverted: {:?}", res);
+                            return (ret, Gas::new(u64::MAX), Bytes::new());
+                        }
+                    }
+                    return (ret, Gas::new(u64::MAX), Bytes::new());
+                },
                 "test_call" => {
                     self.data = input.input.clone();
                     self.value = input.context.apparent_value;
@@ -432,6 +494,9 @@ impl Host for TestHost {
                         { Bytes::from(x.to_vec()) } else { panic!("invalid data") };
                     let value: U256 = if let ethabi::Token::Uint(x) = input[3]
                         { U256::from_str(x.to_string().as_str()).unwrap() } else { panic!("invalid value") };
+
+                    self.add_balance(&target, value);
+                    self.reduce_balance(&caller, value);
 
                     // erc20 analysis
                     let input_vec = data.to_vec();
@@ -488,6 +553,14 @@ impl Host for TestHost {
             }
         }
 
+        //
+        // println!("starting caller: {:?} target: {:?} value: {:?} data: {:?}",
+        //     input.context.caller,
+        //     input.context.address,
+        //     input.context.apparent_value,
+        //     hex::encode(input.input.clone())
+        // );
+
         if self.inside_contract_call {
             self.call_traces.push((input.context.address, input.input.clone()));
             // erc20 analysis
@@ -515,8 +588,21 @@ impl Host for TestHost {
             caller: input.context.caller,
             value: input.context.apparent_value,
         };
+        self.add_balance(&input.context.address, input.context.apparent_value);
+        self.reduce_balance(&input.context.caller, input.context.apparent_value);
+
         let mut interpreter = Interpreter::new(contract, u64::MAX, input.is_static);
         let ret = interpreter.run::<TestHost, LatestSpec>(self);
+
+        // println!("finish caller: {:?} target: {:?} value: {:?} data: {:?}, {:?}: {:?} ({:?})",
+        //          input.context.caller,
+        //          input.context.address,
+        //          input.context.apparent_value,
+        //          hex::encode(input.input.clone()),
+        //         ret,
+        //          interpreter.return_value(),
+        //     hex::encode(interpreter.return_value().to_vec())
+        // );
         self.inside_contract_call = false;
         (ret, Gas::new(u64::MAX), interpreter.return_value())
     }
@@ -610,7 +696,8 @@ fn main() {
         data: Default::default(),
         target: Default::default(),
         inside_contract_call: false,
-        chain
+        chain,
+        set_balance: Default::default(),
     };
 
     let mut name_to_abi = HashMap::new();
